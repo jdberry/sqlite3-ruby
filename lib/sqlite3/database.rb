@@ -94,7 +94,7 @@ in version 2.0.0.
       begin
         yield stmt
       ensure
-        stmt.close
+        stmt.close unless stmt.closed?
       end
     end
 
@@ -221,15 +221,18 @@ Support for this behavior will be removed in version 2.0.0.
       sql = sql.strip
       until sql.empty? do
         prepare( sql ) do |stmt|
-          # FIXME: this should probably use sqlite3's api for batch execution
-          # This implementation requires stepping over the results.
-          if bind_vars.length == stmt.bind_parameter_count
-            stmt.bind_params(bind_vars)
+          unless stmt.closed?
+            # FIXME: this should probably use sqlite3's api for batch execution
+            # This implementation requires stepping over the results.
+            if bind_vars.length == stmt.bind_parameter_count
+              stmt.bind_params(bind_vars)
+            end
+            stmt.step
           end
-          stmt.step
           sql = stmt.remainder.strip
         end
       end
+      # FIXME: we should not return `nil` as a success return value
       nil
     end
 
@@ -446,21 +449,28 @@ Support for this will be removed in version 2.0.0.
     #   puts db.get_first_value( "select lengths(name) from A" )
     def create_aggregate_handler( handler )
       proxy = Class.new do
-        def initialize handler
-          @handler  = handler
-          @fp       = FunctionProxy.new
+        def initialize klass
+          @klass = klass
+          @fp    = FunctionProxy.new
         end
 
         def step( *args )
-          @handler.step(@fp, *args)
+          instance.step(@fp, *args)
         end
 
         def finalize
-          @handler.finalize @fp
+          instance.finalize @fp
+          @instance = nil
           @fp.result
         end
+
+        private
+
+        def instance
+          @instance ||= @klass.new
+        end
       end
-      define_aggregator(handler.name, proxy.new(handler.new))
+      define_aggregator(handler.name, proxy.new(handler))
       self
     end
 

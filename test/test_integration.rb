@@ -21,12 +21,14 @@ class TC_Database_Integration < SQLite3::TestCase
 
   def test_table_info_with_defaults_for_version_3_3_8_and_higher
     @db.transaction do
-      @db.execute "create table defaults_test ( a string default NULL, b string default 'Hello' )"
+      @db.execute "create table defaults_test ( a string default NULL, b string default 'Hello', c string default '--- []\n' )"
       data = @db.table_info( "defaults_test" )
       assert_equal({"name" => "a", "type" => "string", "dflt_value" => nil, "notnull" => 0, "cid" => 0, "pk" => 0},
         data[0])
       assert_equal({"name" => "b", "type" => "string", "dflt_value" => "Hello", "notnull" => 0, "cid" => 1, "pk" => 0},
         data[1])
+      assert_equal({"name" => "c", "type" => "string", "dflt_value" => "--- []\n", "notnull" => 0, "cid" => 2, "pk" => 0},
+        data[2])
     end
   end
 
@@ -528,21 +530,36 @@ class TC_Database_Integration < SQLite3::TestCase
     assert_equal 0, value
   end
 
-  def test_create_aggregate_handler
-    handler = Class.new do
-      class << self
-        def arity; 1; end
-        def text_rep; SQLite3::Constants::TextRep::ANY; end
-        def name; "multiply"; end
+  class AggregateHandler
+    class << self
+      def arity; 1; end
+      def text_rep; SQLite3::Constants::TextRep::ANY; end
+      def name; "multiply"; end
+    end
+    def step(ctx, a)
+      ctx[:buffer] ||= 1
+      ctx[:buffer] *= a.to_i
+    end
+    def finalize(ctx); ctx.result = ctx[:buffer]; end
+  end
+
+  def test_aggregate_initialized_twice
+    initialized = 0
+    handler = Class.new(AggregateHandler) do
+      define_method(:initialize) do
+        initialized += 1
+        super()
       end
-      def step(ctx, a)
-        ctx[:buffer] ||= 1
-        ctx[:buffer] *= a.to_i
-      end
-      def finalize(ctx); ctx.result = ctx[:buffer]; end
     end
 
-    @db.create_aggregate_handler( handler )
+    @db.create_aggregate_handler handler
+    @db.get_first_value( "select multiply(a) from foo" )
+    @db.get_first_value( "select multiply(a) from foo" )
+    assert_equal 2, initialized
+  end
+
+  def test_create_aggregate_handler
+    @db.create_aggregate_handler AggregateHandler
     value = @db.get_first_value( "select multiply(a) from foo" )
     assert_equal 6, value
   end
